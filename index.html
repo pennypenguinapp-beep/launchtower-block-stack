@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Block Stack — LaunchTower</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #0d0f14;
+    color: #e8eaf0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #wrap {
+    position: relative;
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas { display: block; }
+  #hud {
+    position: absolute; top: 14px; left: 0; right: 0;
+    display: flex; justify-content: center; gap: 28px;
+    pointer-events: none; z-index: 5;
+  }
+  .hud-box {
+    background: rgba(20, 24, 34, 0.72);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 8px 18px;
+    text-align: center;
+    min-width: 92px;
+    backdrop-filter: blur(4px);
+  }
+  .hud-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #8b93a7; }
+  .hud-value { font-size: 22px; font-weight: 700; margin-top: 2px; }
+  #scoreVal { color: #7ee787; }
+  #bestVal { color: #58a6ff; }
+  #combo {
+    position: absolute; top: 78px; left: 0; right: 0;
+    text-align: center; font-size: 15px; font-weight: 600;
+    color: #ffd866; pointer-events: none; z-index: 5;
+    opacity: 0; transition: opacity 0.25s;
+  }
+  #overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(10, 12, 18, 0.82);
+    z-index: 10; text-align: center; padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h1 {
+    font-size: 34px; font-weight: 800; letter-spacing: 1px;
+    background: linear-gradient(135deg, #7ee787, #58a6ff);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 10px;
+  }
+  #overlay p { color: #9aa3b8; font-size: 14px; line-height: 1.7; max-width: 340px; margin-bottom: 22px; }
+  #overlay .final { font-size: 17px; color: #e8eaf0; margin-bottom: 6px; }
+  #overlay .final b { color: #7ee787; font-size: 26px; }
+  #overlay .newbest { color: #ffd866; font-size: 13px; font-weight: 700; letter-spacing: 1px; margin-bottom: 14px; }
+  #startBtn {
+    pointer-events: auto; cursor: pointer;
+    background: linear-gradient(135deg, #2ea043, #238636);
+    color: #fff; border: none; border-radius: 12px;
+    font-size: 17px; font-weight: 700; letter-spacing: 1px;
+    padding: 14px 44px;
+    box-shadow: 0 6px 20px rgba(46, 160, 67, 0.35);
+    transition: transform 0.12s, box-shadow 0.12s;
+  }
+  #startBtn:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(46, 160, 67, 0.5); }
+  #startBtn:active { transform: translateY(0); }
+  footer {
+    position: absolute; bottom: 8px; left: 0; right: 0;
+    text-align: center; z-index: 5; pointer-events: none;
+  }
+  footer a {
+    color: #5a6378; font-size: 11px; text-decoration: none;
+    pointer-events: auto;
+  }
+  footer a:hover { color: #8b93a7; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="hud">
+    <div class="hud-box"><div class="hud-label">Height</div><div class="hud-value" id="scoreVal">0</div></div>
+    <div class="hud-box"><div class="hud-label">Best</div><div class="hud-value" id="bestVal">0</div></div>
+  </div>
+  <div id="combo"></div>
+  <div id="overlay">
+    <h1>BLOCK STACK</h1>
+    <p id="ovText">A block slides across the top. Tap, click, or press space to drop it.<br>Overhang gets cut off — perfect drops (±4px) widen the tower.<br>Stack as high as you can.</p>
+    <div class="final" id="finalScore" style="display:none">You stacked <b id="finalNum">0</b> blocks</div>
+    <div class="newbest" id="newBest" style="display:none">★ NEW BEST ★</div>
+    <button id="startBtn">START</button>
+  </div>
+  <footer><a href="https://pennypenguinapp-beep.github.io/" target="_blank" rel="noopener">more games → LaunchTower</a></footer>
+</div>
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('scoreVal');
+  var bestEl = document.getElementById('bestVal');
+  var comboEl = document.getElementById('combo');
+  var overlay = document.getElementById('overlay');
+  var ovText = document.getElementById('ovText');
+  var finalScore = document.getElementById('finalScore');
+  var finalNum = document.getElementById('finalNum');
+  var newBest = document.getElementById('newBest');
+  var startBtn = document.getElementById('startBtn');
+
+  var W = 0, H = 0, DPR = 1;
+  var BLOCK_H = 34;
+  var BASE_W = 150;
+  var PERFECT_TOL = 4;
+
+  var state = 'menu'; // menu | playing | over
+  var blocks = [];       // {x, w, hue}
+  var moving = null;     // {x, w, dir, speed, hue}
+  var score = 0;
+  var best = 0;
+  var combo = 0;
+  var camY = 0;          // camera offset (px scrolled up)
+  var camYTarget = 0;
+  var particles = [];
+  var shake = 0;
+  var lastTime = 0;
+  var comboTimer = 0;
+
+  try { best = parseInt(localStorage.getItem('blockstack_best') || '0', 10) || 0; } catch (e) {}
+  bestEl.textContent = best;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function hueFor(i) { return (150 + i * 14) % 360; }
+
+  function topY() {
+    // y of the top surface of the tower in world coords (y grows downward)
+    return H - 60 - blocks.length * BLOCK_H;
+  }
+
+  function spawnMoving() {
+    var top = blocks[blocks.length - 1];
+    var w = top.w;
+    var dir = Math.random() < 0.5 ? 1 : -1;
+    var speed = Math.min(140 + score * 6, 420); // px/s, ramps with height
+    var x = dir === 1 ? -w : W;
+    moving = { x: x, w: w, dir: dir, speed: speed, hue: hueFor(blocks.length) };
+  }
+
+  function startGame() {
+    blocks = [];
+    score = 0;
+    combo = 0;
+    camY = 0;
+    camYTarget = 0;
+    particles = [];
+    shake = 0;
+    // base block
+    var bw = Math.min(BASE_W, W * 0.5);
+    blocks.push({ x: (W - bw) / 2, w: bw, hue: 150 });
+    scoreEl.textContent = '0';
+    spawnMoving();
+    state = 'playing';
+    overlay.classList.add('hidden');
+    ovText.style.display = '';
+    finalScore.style.display = 'none';
+    newBest.style.display = 'none';
+    startBtn.textContent = 'START';
+  }
+
+  function showCombo(text, color) {
+    comboEl.textContent = text;
+    comboEl.style.color = color;
+    comboEl.style.opacity = '1';
+    comboTimer = 1.1;
+  }
+
+  function burst(x, y, hue, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var sp = 60 + Math.random() * 220;
+      particles.push({
+        x: x, y: y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp - 60,
+        life: 0.5 + Math.random() * 0.5,
+        max: 1,
+        size: 2 + Math.random() * 4,
+        hue: hue
+      });
+    }
+  }
+
+  function drop() {
+    if (state !== 'playing' || !moving) return;
+    var top = blocks[blocks.length - 1];
+    var m = moving;
+    var overlap = Math.min(m.x + m.w, top.x + top.w) - Math.max(m.x, top.x);
+    var diff = m.x - top.x;
+
+    if (overlap <= 0) {
+      // missed entirely — block falls, game over
+      m.missed = true;
+      m.vy = 0;
+      m.vx = m.dir * 40;
+      moving = null;
+      endGame();
+      return;
+    }
+
+    var isPerfect = Math.abs(diff) <= PERFECT_TOL;
+    var newX, newW;
+    if (isPerfect) {
+      newX = top.x;
+      newW = Math.min(top.w + 6, W * 0.7);
+      combo++;
+      showCombo('PERFECT ×' + combo + '  +' + (6 * combo), '#ffd866');
+      burst(top.x + top.w / 2, topY(), m.hue, 26);
+      shake = 5;
+    } else {
+      newX = m.x;
+      newW = overlap;
+      combo = 0;
+      // cut-off piece falls
+      var cutW = m.w - overlap;
+      var cutX = diff > 0 ? m.x + overlap : m.x;
+      particles.push({
+        x: cutX, y: topY(), vx: (diff > 0 ? 1 : -1) * 30, vy: 0,
+        life: 1.2, max: 1.2, size: 0, hue: m.hue, cut: true, w: cutW
+      });
+      burst(newX + newW / 2, topY(), m.hue, 10);
+    }
+
+    blocks.push({ x: newX, w: newW, hue: m.hue });
+    score++;
+    scoreEl.textContent = score;
+    moving = null;
+
+    // camera: keep tower top around 45% from bottom
+    var desired = H - 60 - blocks.length * BLOCK_H;
+    if (desired > H * 0.45) {
+      camYTarget = H - 60 - blocks.length * BLOCK_H - H * 0.45;
+    }
+
+    if (newW < 14) {
+      // too thin to continue — next drop will almost certainly miss; still allow
+    }
+    spawnMoving();
+  }
+
+  function endGame() {
+    state = 'over';
+    var isNew = score > best;
+    if (isNew) {
+      best = score;
+      try { localStorage.setItem('blockstack_best', String(best)); } catch (e) {}
+      bestEl.textContent = best;
+    }
+    finalNum.textContent = score;
+    setTimeout(function () {
+      overlay.classList.remove('hidden');
+      ovText.style.display = 'none';
+      finalScore.style.display = '';
+      newBest.style.display = isNew ? '' : 'none';
+      startBtn.textContent = 'PLAY AGAIN';
+    }, 650);
+  }
+
+  function update(dt) {
+    if (moving) {
+      moving.x += moving.dir * moving.speed * dt;
+      // bounce off edges
+      if (moving.dir === 1 && moving.x > W) { moving.x = W; moving.dir = -1; }
+      if (moving.dir === -1 && moving.x < -moving.w) { moving.x = -moving.w; moving.dir = 1; }
+      if (moving.missed) {
+        moving.vy += 900 * dt;
+        moving.y = (moving.y || 0) + moving.vy * dt;
+        moving.x += moving.vx * dt;
+      }
+    }
+    // camera lerp
+    camY += (camYTarget - camY) * Math.min(1, dt * 6);
+    if (shake > 0) shake = Math.max(0, shake - dt * 30);
+    if (comboTimer > 0) {
+      comboTimer -= dt;
+      if (comboTimer <= 0) comboEl.style.opacity = '0';
+    }
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      p.vy += 500 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+    }
+  }
+
+  function drawBlock(x, y, w, hue, alpha) {
+    var l = 42;
+    ctx.globalAlpha = alpha == null ? 1 : alpha;
+    // body
+    ctx.fillStyle = 'hsl(' + hue + ', 55%, ' + l + '%)';
+    ctx.fillRect(x, y, w, BLOCK_H);
+    // top highlight
+    ctx.fillStyle = 'hsl(' + hue + ', 60%, ' + (l + 14) + '%)';
+    ctx.fillRect(x, y, w, 4);
+    // bottom shade
+    ctx.fillStyle = 'hsl(' + hue + ', 50%, ' + (l - 14) + '%)';
+    ctx.fillRect(x, y + BLOCK_H - 4, w, 4);
+    // subtle inner grid lines for pixel feel
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    for (var gx = x + 8; gx < x + w - 4; gx += 16) {
+      ctx.fillRect(gx, y + 6, 1, BLOCK_H - 12);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    // background gradient
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#11141c');
+    g.addColorStop(1, '#0a0c11');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // faint stars
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    var seed = 7;
+    for (var i = 0; i < 40; i++) {
+      seed = (seed * 16807) % 2147483647;
+      var sx = (seed % 1000) / 1000 * W;
+      seed = (seed * 16807) % 2147483647;
+      var sy = (seed % 1000) / 1000 * H;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+
+    var sx = 0, sy = 0;
+    if (shake > 0) {
+      sx = (Math.random() - 0.5) * shake;
+      sy = (Math.random() - 0.5) * shake;
+    }
+    ctx.save();
+    ctx.translate(sx, sy + camY);
+
+    // ground
+    ctx.fillStyle = '#1a1f2b';
+    ctx.fillRect(0, H - 60, W, 60);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(0, H - 60, W, 2);
+
+    // blocks
+    for (var b = 0; b < blocks.length; b++) {
+      var blk = blocks[b];
+      var by = H - 60 - (b + 1) * BLOCK_H;
+      drawBlock(blk.x, by, blk.w, blk.hue);
+    }
+
+    // moving block
+    if (moving) {
+      var my;
+      if (moving.missed) {
+        my = H - 60 - blocks.length * BLOCK_H + (moving.y || 0);
+      } else {
+        my = H - 60 - (blocks.length + 1) * BLOCK_H;
+      }
+      drawBlock(moving.x, my, moving.w, moving.hue);
+      // guide line
+      if (!moving.missed) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        ctx.moveTo(moving.x + moving.w / 2, my + BLOCK_H);
+        ctx.lineTo(moving.x + moving.w / 2, H - 60);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // particles
+    for (var p = 0; p < particles.length; p++) {
+      var pt = particles[p];
+      var a = Math.max(0, pt.life / pt.max);
+      if (pt.cut) {
+        // falling cut piece
+        ctx.globalAlpha = a;
+        drawBlock(pt.x, pt.y, pt.w, pt.hue, a);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillStyle = 'hsla(' + pt.hue + ', 70%, 65%, ' + a + ')';
+        ctx.fillRect(pt.x - pt.size / 2, pt.y - pt.size / 2, pt.size, pt.size);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  function loop(t) {
+    var dt = Math.min((t - lastTime) / 1000, 0.05);
+    lastTime = t;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(function (t) { lastTime = t; loop(t); });
+
+  function input() {
+    if (state === 'playing') drop();
+  }
+
+  canvas.addEventListener('pointerdown', function (e) { e.preventDefault(); input(); });
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.code === 'Enter') {
+      e.preventDefault();
+      if (state === 'playing') drop();
+      else startGame();
+    }
+  });
+  startBtn.addEventListener('click', function () { startGame(); });
+})();
+</script>
+</body>
+</html>
